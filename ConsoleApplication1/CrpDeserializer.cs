@@ -17,6 +17,7 @@ namespace ConsoleApplication1
         private CrpReader reader;
         private AssetParser assetParser;
         private Dictionary<string, int> typeRefCount = new Dictionary<string, int>();
+        private string crpHash;
 
 		/// <summary>
 		/// Initializes the object by opening the specified CRP file. Note and be prepared to handle the exceptions
@@ -31,6 +32,8 @@ namespace ConsoleApplication1
             this.outputFolder = string.IsNullOrEmpty(outputFolder) 
                                 ? Path.GetDirectoryName(filePath)
                                 : outputFolder;
+            // Extract the CRP hash from the filename
+            this.crpHash = Path.GetFileNameWithoutExtension(filePath);
 			stream = File.Open(filePath, FileMode.Open);
             reader = new CrpReader(stream);
             assetParser = new AssetParser(reader);
@@ -45,8 +48,8 @@ namespace ConsoleApplication1
 
                 if (options.SaveFiles)
                 {
-                    // string path = Directory.GetCurrentDirectory() + Path.DirectorySeparatorChar + header.mainAssetName + "_contents";
-                    string path = Path.Combine(outputFolder, header.mainAssetName);
+                    // Use CRP hash as folder name
+                    string path = Path.Combine(outputFolder, crpHash);
                     if (!Directory.Exists(path))
                     {
                         Directory.CreateDirectory(path);
@@ -60,7 +63,7 @@ namespace ConsoleApplication1
                 }
                 if (options.SaveFiles)
                 {
-                    StreamWriter file = new StreamWriter(new FileStream(header.mainAssetName + "_header.json", FileMode.Create));
+                    StreamWriter file = new StreamWriter(new FileStream(crpHash + "_header.json", FileMode.Create));
                     string json = JsonConvert.SerializeObject(header, Formatting.Indented, new Newtonsoft.Json.Converters.StringEnumConverter());
                     file.Write(json);
                     file.Close();
@@ -133,8 +136,8 @@ namespace ConsoleApplication1
             //Find the first instance of data(PNG file)
             CrpAssetInfoHeader info = header.assets.Find(asset => asset.assetName.Contains(Consts.DATA_EXTENSION));
 
-            //Generate a name for the file
-            string fileName = string.Format("{0}.png", StrUtils.limitStr(info.assetName), info.assetType.ToString());
+            //Generate a name for the file using the new format
+            string fileName = string.Format("{0}_entry_lut_{1}", crpHash, "UnityEngine.Texture2D");
 
             //Should be unnessecary in current version(stream pointer should already be at start of file),
             //but advance stream pointer to file position
@@ -148,15 +151,12 @@ namespace ConsoleApplication1
             }
             if (saveFiles)
             {
-                retVal.Write(fileName);
+                retVal.Write(fileName + ".png");
             }
-
-
         }
 
         private void parseAssets(CrpHeader header, int index, bool saveFiles, bool isVerbose)
         {
-
             bool isNullFlag = reader.ReadBoolean();
             if (!isNullFlag)
             {
@@ -166,10 +166,12 @@ namespace ConsoleApplication1
                 string assetName = reader.ReadString();
                 assetContentLen -= (1 + assetName.Length);
 
-                string fileName = string.Format("{0}_{1}_{2}", StrUtils.limitStr(assetName), index, header.assets[index].assetType.ToString());
+                // New file naming format: {crpHash}_entry_{index}_{assetType}
+                string fileName = string.Format("{0}_entry_{1}_{2}", crpHash, index, assetType);
                 assetParser.parseObject((int)assetContentLen, assetType, saveFiles, fileName, isVerbose);
             } 
         }
 
     }
 }
+
