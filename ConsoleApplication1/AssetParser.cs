@@ -36,6 +36,11 @@ namespace ConsoleApplication1
         public dynamic parseObject(int length, string format, bool saveFile = false, string saveFilePath = null,bool verbose=false)
         {
             dynamic retVal;
+            if (verbose)
+            {
+                Console.WriteLine($"parseObject, length: {length}, format: {format}, saveFilePath: {saveFilePath}");
+            }
+
             if (parsers.ContainsKey(format))
             {
                 retVal = this.parsers[format](reader, saveFile, saveFilePath,length,verbose);

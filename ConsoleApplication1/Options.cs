@@ -22,6 +22,10 @@ namespace CrpParser
           HelpText = "Save parsed values")]
         public bool SaveFiles { get; set; }
 
+        [Option('o', "out", Required = false,
+        HelpText = "Directory to save extracted files (defaults to .crp folder)")]
+        public string OutputFolder { get; set; } = "";
+
         [HelpOption]
         public string GetUsage()
         {

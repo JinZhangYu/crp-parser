@@ -12,6 +12,7 @@ namespace ConsoleApplication1
 	public class CrpDeserializer
     {
         public string filePath;
+        public string outputFolder;
         private FileStream stream;
         private CrpReader reader;
         private AssetParser assetParser;
@@ -24,8 +25,12 @@ namespace ConsoleApplication1
 		/// <param name="filePath">Path to the CRP file that needs to be opened.</param>
 		/// <exception cref="System.IO.IOException">Thrown if i.e the filePath parameter is incorrect, file is missing,
 		/// in use, etc.</exception>
-		public CrpDeserializer(string filePath)
+		public CrpDeserializer(string filePath, string outputFolder)
         {
+            this.filePath = filePath;
+            this.outputFolder = string.IsNullOrEmpty(outputFolder) 
+                                ? Path.GetDirectoryName(filePath)
+                                : outputFolder;
 			stream = File.Open(filePath, FileMode.Open);
             reader = new CrpReader(stream);
             assetParser = new AssetParser(reader);
@@ -40,7 +45,8 @@ namespace ConsoleApplication1
 
                 if (options.SaveFiles)
                 {
-                    string path = Directory.GetCurrentDirectory() + Path.DirectorySeparatorChar + header.mainAssetName + "_contents";
+                    // string path = Directory.GetCurrentDirectory() + Path.DirectorySeparatorChar + header.mainAssetName + "_contents";
+                    string path = Path.Combine(outputFolder, header.mainAssetName);
                     if (!Directory.Exists(path))
                     {
                         Directory.CreateDirectory(path);
