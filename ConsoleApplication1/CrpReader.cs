@@ -394,7 +394,8 @@ namespace ConsoleApplication1
             }
             else
             {
-                throw new KeyNotFoundException(String.Format("Type {0} cannot be parsed! Please file a bug report :(", name));
+                // throw new KeyNotFoundException(String.Format("Type {0} cannot be parsed! Please file a bug report :(", name));
+                return this.ReadString();
             }
         }
 
