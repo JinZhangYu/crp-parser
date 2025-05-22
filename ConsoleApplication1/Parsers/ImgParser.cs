@@ -1,4 +1,4 @@
-﻿using ImageMagick;
+using ImageMagick;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -15,37 +15,68 @@ namespace ConsoleApplication1.Parsers
 
         public static MagickImage parseImage(CrpReader reader, bool saveFile, string saveFileName, long fileSize, bool verbose)
         {
-            bool forceLinearFlag = reader.ReadBoolean();
-            uint imgLength = reader.ReadUInt32();
-            
-            if (verbose)
+            try
             {
-                Console.WriteLine("parseImage, saveFileName: {0}, fileSize: {1}, imgLength {2}", saveFileName, fileSize, imgLength);
-            }
-
-            // Use fileSize instead of imgLength
-            uint actualImageSize = (uint)(fileSize - 5);  // 5 = 1 byte (boolean) + 4 bytes (uint)
-            MagickImage retVal = parseImgFile(reader, actualImageSize);
-
-            string fileName = saveFileName + ".png";
-            
-            if (verbose)
-            {
-                Console.WriteLine("Read image file {0}", fileName);
-            }
-            if (saveFile)
-            {
-                // Ensure directory exists
-                string directory = Path.GetDirectoryName(fileName);
-                if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+                bool forceLinearFlag = reader.ReadBoolean();
+                uint imgLength = reader.ReadUInt32();
+                
+                if (verbose)
                 {
-                    Directory.CreateDirectory(directory);
+                    Console.WriteLine("parseImage, saveFileName: {0}, fileSize: {1}, imgLength {2}", saveFileName, fileSize, imgLength);
+                }
+
+                // Calculate actual image size based on the file size minus header size
+                // 5 = 1 byte (boolean) + 4 bytes (uint)
+                uint actualImageSize = (uint)(fileSize - 5);
+                
+                if (verbose)
+                {
+                    Console.WriteLine("Actual image size: {0} bytes", actualImageSize);
                 }
                 
-                retVal.Write(fileName);
+                MagickImage retVal = parseImgFile(reader, actualImageSize);
+                string fileName = saveFileName + ".png";
+                
+                if (verbose)
+                {
+                    Console.WriteLine("Read image file {0}, dimensions: {1}x{2}", fileName, retVal.Width, retVal.Height);
+                }
+                
+                if (saveFile)
+                {
+                    // Ensure directory exists
+                    string directory = Path.GetDirectoryName(fileName);
+                    if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+                    {
+                        Directory.CreateDirectory(directory);
+                    }
+                    
+                    // Apply auto-orientation and strip metadata for cleaner output
+                    retVal.AutoOrient();
+                    retVal.Strip();
+                    
+                    // Save image
+                    retVal.Write(fileName);
+                    
+                    if (verbose)
+                    {
+                        Console.WriteLine("Saved image to {0}", fileName);
+                    }
+                }
+                
+                return retVal;
             }
-            
-            return retVal;
+            catch (Exception ex)
+            {
+                Console.WriteLine("Error parsing image: {0}", ex.Message);
+                if (verbose)
+                {
+                    Console.WriteLine(ex.StackTrace);
+                }
+                
+                // Return an empty image on error
+                return new MagickImage();
+            }
         }
 
         public static MagickImage parseImgFile(CrpReader reader, uint fileSize)
@@ -63,43 +94,137 @@ namespace ConsoleApplication1.Parsers
                 throw new InvalidDataException($"Failed to read image data: requested {fileSize} bytes");
             }
 
-            // Check for PNG header
-            bool isPng = CheckForSequence(imageData, PNG_HEADER);
+            // Special handling for Cities Skylines textures
+            // Look for known texture headers at different offsets
+            // Sometimes textures in Cities Skylines have padding or metadata before the actual image data
             
-            // Check for DDS header
-            bool isDds = CheckForSequence(imageData, DDS_HEADER);
-            
-            if (isDds)
+            // Check for common image format headers throughout the data
+            for (int offset = 0; offset < imageData.Length - 16; offset++)
             {
-                // Handle DDS format
-                int ddsOffset = FindSequenceOffset(imageData, DDS_HEADER);
-                if (ddsOffset >= 0)
+                // Check for DDS header
+                if (offset + 4 < imageData.Length && 
+                    imageData[offset] == 'D' && imageData[offset+1] == 'D' && 
+                    imageData[offset+2] == 'S' && imageData[offset+3] == ' ')
                 {
-                    byte[] ddsData = new byte[imageData.Length - ddsOffset];
-                    Array.Copy(imageData, ddsOffset, ddsData, 0, ddsData.Length);
-                    var image = new MagickImage(ddsData);
-                    image.Format = MagickFormat.Dds;
-                    return image;
+                    try
+                    {
+                        byte[] ddsData = new byte[imageData.Length - offset];
+                        Array.Copy(imageData, offset, ddsData, 0, ddsData.Length);
+                        
+                        var image = new MagickImage();
+                        image.Read(ddsData, MagickFormat.Dds);
+                        image.Format = MagickFormat.Png; // Convert to PNG for better compatibility
+                        return image;
+                    }
+                    catch (Exception)
+                    {
+                        // Continue searching if this offset didn't work
+                    }
+                }
+                
+                // Check for PNG header
+                if (offset + 8 < imageData.Length &&
+                    imageData[offset] == 137 && imageData[offset+1] == 80 && 
+                    imageData[offset+2] == 78 && imageData[offset+3] == 71 &&
+                    imageData[offset+4] == 13 && imageData[offset+5] == 10 &&
+                    imageData[offset+6] == 26 && imageData[offset+7] == 10)
+                {
+                    try
+                    {
+                        byte[] pngData = new byte[imageData.Length - offset];
+                        Array.Copy(imageData, offset, pngData, 0, pngData.Length);
+                        
+                        var image = new MagickImage();
+                        image.Read(pngData, MagickFormat.Png);
+                        return image;
+                    }
+                    catch (Exception)
+                    {
+                        // Continue searching if this offset didn't work
+                    }
+                }
+                
+                // Check for JPEG header (multiple possible signatures)
+                if ((offset + 4 < imageData.Length &&
+                     imageData[offset] == 0xFF && imageData[offset+1] == 0xD8 && 
+                     imageData[offset+2] == 0xFF && (imageData[offset+3] == 0xE0 || 
+                                                     imageData[offset+3] == 0xE1 || 
+                                                     imageData[offset+3] == 0xDB)))
+                {
+                    try
+                    {
+                        byte[] jpegData = new byte[imageData.Length - offset];
+                        Array.Copy(imageData, offset, jpegData, 0, jpegData.Length);
+                        
+                        var image = new MagickImage();
+                        image.Read(jpegData, MagickFormat.Jpeg);
+                        return image;
+                    }
+                    catch (Exception)
+                    {
+                        // Continue searching if this offset didn't work
+                    }
                 }
             }
-            else if (isPng)
+            
+            // If we couldn't find any known image format, try using raw pixel data
+            // This is common in Cities Skylines where textures might be stored in a custom format
+            try
             {
-                // Handle PNG format
-                int pngOffset = FindSequenceOffset(imageData, PNG_HEADER);
-                if (pngOffset >= 0)
+                // Try to use ImageMagick's RGBA format assuming common texture dimensions
+                int possibleSqrtSize = (int)Math.Sqrt(imageData.Length / 4); // Assuming 4 bytes per pixel (RGBA)
+                
+                if (possibleSqrtSize > 0 && possibleSqrtSize * possibleSqrtSize * 4 == imageData.Length)
                 {
-                    byte[] pngData = new byte[imageData.Length - pngOffset];
-                    Array.Copy(imageData, pngOffset, pngData, 0, pngData.Length);
-                    var image = new MagickImage(pngData);
-                    image.Format = MagickFormat.Png;
+                    // It's likely a square RGBA texture
+                    var image = new MagickImage(imageData, new MagickReadSettings 
+                    { 
+                        Format = MagickFormat.Rgba, 
+                        Width = possibleSqrtSize, 
+                        Height = possibleSqrtSize 
+                    });
                     return image;
                 }
+                else
+                {
+                    // Try common texture dimensions: 1024x1024, 512x512, 256x256, 128x128, 64x64
+                    int[] commonSizes = { 1024, 512, 256, 128, 64 };
+                    
+                    foreach (int size in commonSizes)
+                    {
+                        if (imageData.Length >= size * size * 3) // At least RGB data
+                        {
+                            try
+                            {
+                                var image = new MagickImage(imageData, new MagickReadSettings 
+                                { 
+                                    Format = MagickFormat.Rgb, 
+                                    Width = size, 
+                                    Height = size 
+                                });
+                                return image;
+                            }
+                            catch
+                            {
+                                // Try next size
+                            }
+                        }
+                    }
+                }
+                
+                // Last attempt: try to read it directly
+                var defaultImage = new MagickImage();
+                defaultImage.Read(imageData);
+                defaultImage.Format = MagickFormat.Png;
+                return defaultImage;
             }
-            
-            // If no specific format is detected or no header found, return as raw image
-            var defaultImage = new MagickImage(imageData);
-            defaultImage.Format = MagickFormat.Png; // Default to PNG
-            return defaultImage;
+            catch (Exception)
+            {
+                // Last resort: create a new empty image
+                var emptyImage = new MagickImage(MagickColors.Transparent, 1, 1);
+                emptyImage.Format = MagickFormat.Png;
+                return emptyImage;
+            }
         }
 
         private static bool CheckForSequence(byte[] data, byte[] sequence)

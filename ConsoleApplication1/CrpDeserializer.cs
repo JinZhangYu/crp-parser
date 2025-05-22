@@ -1,4 +1,4 @@
-﻿using ConsoleApplication1.Parsers;
+using ConsoleApplication1.Parsers;
 using CrpParser;
 using CrpParser.Utils;
 using ImageMagick;
@@ -74,10 +74,36 @@ namespace ConsoleApplication1
                 }
                 else
                 {
+                    // First, get the absolute position where asset content begins
+                    long absoluteContentBegin = header.contentBeginIndex;
+                
                     for (int i = 0; i < header.numAssets; i++)
                     {
-                        parseAssets(header, i, options.SaveFiles, options.Verbose);
-                    }
+                        try {
+                            // Reset stream position to the beginning of this specific asset
+                            stream.Position = absoluteContentBegin + header.assets[i].assetOffsetBegin;
+                        
+                            // Re-initialize reader with current stream position
+                            reader = new CrpReader(stream);
+                        
+                            // Parse the asset
+                            if (options.Verbose)
+                            {
+                                Console.WriteLine($"Processing asset {i+1}/{header.numAssets}: {header.assets[i].assetName}");
+                                Console.WriteLine($"Asset position: {stream.Position}, Asset size: {header.assets[i].assetSize}");
+                            }
+                        
+                            parseAssets(header, i, options.SaveFiles, options.Verbose);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Error during asset {i+1} processing: {ex.Message}");
+                            if (options.Verbose)
+                            {
+                                Console.WriteLine(ex.StackTrace);
+                            }
+                        }
+                    }   
                 }
             }
             else
@@ -157,21 +183,116 @@ namespace ConsoleApplication1
 
         private void parseAssets(CrpHeader header, int index, bool saveFiles, bool isVerbose)
         {
-            bool isNullFlag = reader.ReadBoolean();
-            if (!isNullFlag)
+            long contentBeginPos = header.contentBeginIndex;
+            try
             {
-                string assemblyQualifiedName = reader.ReadString();
-                string assetType = assemblyQualifiedName.Split(new char[] { ',' })[0];
-                long assetContentLen = header.assets[index].assetSize - (2 + assemblyQualifiedName.Length);
-                string assetName = reader.ReadString();
-                assetContentLen -= (1 + assetName.Length);
+                try
+                {
+                    // Try the standard method for all asset types
+                    bool isNullFlag = reader.ReadBoolean();
+                    if (!isNullFlag)
+                    {
+                        string assemblyQualifiedName = reader.ReadString();
+                        string specificType = assemblyQualifiedName.Split(new char[] { ',' })[0];
+                        long assetContentLen = header.assets[index].assetSize - (2 + assemblyQualifiedName.Length);
+                        string assetName = reader.ReadString();
+                        assetContentLen -= (1 + assetName.Length);
 
-                // New file naming format: {crpHash}_entry_{index}_{assetType}
-                string fileName = string.Format("{0}_entry_{1}_{2}", crpHash, index, assetType);
-                assetParser.parseObject((int)assetContentLen, assetType, saveFiles, fileName, isVerbose);
-            } 
+                        // Create filename based on the correct pattern
+                        string fileName = string.Format("{0}_entry_{1}_{2}", crpHash, index, specificType);
+                        
+                        if (isVerbose)
+                        {
+                            Console.WriteLine($"Asset {index}: {specificType}, Length: {assetContentLen}, Name: {assetName}");
+                        }
+                        
+                        // Use the asset parser with the correct type for all assets
+                        assetParser.parseObject((int)assetContentLen, specificType, saveFiles, fileName, isVerbose);
+                    }
+                    else if (isVerbose)
+                    {
+                        Console.WriteLine($"Asset {index} is null");
+                        
+                        // Save raw data for null assets
+                        if (saveFiles)
+                        {
+                            try 
+                            {
+                                string rawFilename = string.Format("{0}_entry_{1}_raw", crpHash, index);
+                                byte[] rawData = reader.ReadBytes((int)header.assets[index].assetSize - 1); // -1 for the bool we already read
+                                File.WriteAllBytes(rawFilename + ".bin", rawData);
+                                if (isVerbose)
+                                {
+                                    Console.WriteLine($"Saved raw data for null asset to {rawFilename}.bin");
+                                }
+                            }
+                            catch (Exception rawEx)
+                            {
+                                Console.WriteLine($"Error saving raw data for null asset: {rawEx.Message}");
+                            }
+                        }
+                    }
+                }
+                catch (Exception parseEx)
+                {
+                    Console.WriteLine($"Error in standard parsing for asset {index}: {parseEx.Message}");
+                    
+                    // Fallback to raw data extraction
+                    if (saveFiles)
+                    {
+                        try 
+                        {
+                            // Reset position to the start of this asset
+                            stream.Position = contentBeginPos + header.assets[index].assetOffsetBegin;
+                            reader = new CrpReader(stream);
+                            
+                            string rawFilename = string.Format("{0}_entry_{1}_raw", crpHash, index);
+                            byte[] rawData = reader.ReadBytes((int)header.assets[index].assetSize);
+                            File.WriteAllBytes(rawFilename + ".bin", rawData);
+                            if (isVerbose)
+                            {
+                                Console.WriteLine($"Saved raw asset data to {rawFilename}.bin");
+                            }
+                        }
+                        catch (Exception rawEx)
+                        {
+                            Console.WriteLine($"Error saving raw asset data: {rawEx.Message}");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error processing asset {index}: {ex.Message}");
+                if (isVerbose)
+                {
+                    Console.WriteLine(ex.StackTrace);
+                }
+            }
+        }
+        
+        /// <summary>
+        /// Cleans a filename by removing invalid characters and truncating if too long.
+        /// </summary>
+        private string CleanFilename(string filename)
+        {
+            if (string.IsNullOrEmpty(filename))
+                return "unnamed";
+                
+            // Replace invalid characters with underscores
+            char[] invalidChars = Path.GetInvalidFileNameChars();
+            string cleanName = string.Join("_", filename.Split(invalidChars));
+            
+            // Truncate if too long (Windows has a 260 character path limit, but we'll be more conservative)
+            const int MaxFileNameLength = 100;
+            if (cleanName.Length > MaxFileNameLength)
+            {
+                cleanName = cleanName.Substring(0, MaxFileNameLength - 10) + "_" + 
+                           Guid.NewGuid().ToString().Substring(0, 8); // Add a unique identifier
+            }
+            
+            return cleanName;
         }
 
     }
 }
-
